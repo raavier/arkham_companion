@@ -1,4 +1,7 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { useAuth } from './contexts/AuthContext';
+import AuthForm from './components/AuthForm';
+import { loadCampaigns, saveCampaign as saveToFirestore, deleteCampaign as deleteFromFirestore, migrateFromLocalStorage } from './services/firestoreService';
 
 interface Token { id: string; value: string; name: string; colorClass: string; }
 interface TokenCounts { [key: string]: number; }
@@ -58,7 +61,7 @@ const emptyTokens = (): TokenCounts => { const c: TokenCounts = {}; TOKENS.forEa
 const emptyStats = (): Statistics => ({ totalDraws: 0, tokenDraws: {}, drawHistory: [] });
 const genId = () => Math.random().toString(36).substr(2, 9);
 const getToken = (id: string) => TOKENS.find(t => t.id === id);
-const load = (): Campaign[] => { try { return JSON.parse(localStorage.getItem(STORAGE) || '[]'); } catch { return []; } };
+// Fallback to localStorage when Firebase is not available
 const save = (c: Campaign[]) => { try { localStorage.setItem(STORAGE, JSON.stringify(c)); } catch {} };
 
 const useSound = () => {
@@ -210,6 +213,7 @@ const CampMgr = ({ camps, onSelect, onCreate, onDelete, onClose }: { camps: Camp
 };
 
 export default function ChaosBag() {
+  const { currentUser, logout } = useAuth();
   const [camps, setCamps] = useState<Campaign[]>([]);
   const [camp, setCamp] = useState<Campaign | null>(null);
   const [counts, setCounts] = useState<TokenCounts>(emptyTokens());
@@ -221,12 +225,57 @@ export default function ChaosBag() {
   const [showStats, setShowStats] = useState(false);
   const [showCamps, setShowCamps] = useState(false);
   const [tab, setTab] = useState<'bag' | 'scenarios' | 'investigators' | 'notes'>('bag');
+  const [migrating, setMigrating] = useState(false);
   const { draw: playDraw, success: playSuccess, fail: playFail } = useSound();
 
-  useEffect(() => { setCamps(load()); }, []);
+  // Load campaigns from Firestore when user logs in
+  useEffect(() => {
+    if (!currentUser) {
+      return;
+    }
+
+    const loadUserData = async () => {
+      try {
+        // Try to migrate from localStorage first
+        const localData = localStorage.getItem(STORAGE);
+        if (localData && !migrating) {
+          setMigrating(true);
+          const migratedCount = await migrateFromLocalStorage(currentUser.uid);
+          if (migratedCount > 0) {
+            console.log(`Migrated ${migratedCount} campaigns from localStorage to Firestore`);
+          }
+          setMigrating(false);
+        }
+
+        // Load campaigns from Firestore
+        const campaigns = await loadCampaigns(currentUser.uid);
+        setCamps(campaigns);
+      } catch (error) {
+        console.error('Error loading user data:', error);
+      }
+    };
+
+    loadUserData();
+  }, [currentUser, migrating]);
+
   useEffect(() => { const b: Token[] = []; TOKENS.forEach(t => { for (let i = 0; i < (counts[t.id] || 0); i++) b.push(t); }); setBag(b); }, [counts]);
 
-  const saveCamp = useCallback((c: Campaign) => { const u = camps.map(x => x.id === c.id ? c : x); setCamps(u); save(u); }, [camps]);
+  const saveCamp = useCallback((c: Campaign) => {
+    const u = camps.map(x => x.id === c.id ? c : x);
+    setCamps(u);
+
+    // Save to Firestore if user is logged in
+    if (currentUser) {
+      saveToFirestore(currentUser.uid, c).catch(err => {
+        console.error('Error saving campaign:', err);
+        // Fallback to localStorage on error
+        save(u);
+      });
+    } else {
+      // Fallback to localStorage if not logged in
+      save(u);
+    }
+  }, [camps, currentUser]);
 
   const addTok = (id: string) => { setCounts(p => { const n = { ...p, [id]: (p[id] || 0) + 1 }; if (camp) { const u = { ...camp, tokenCounts: n, updatedAt: Date.now() }; setCamp(u); setTimeout(() => saveCamp(u), 0); } return n; }); };
   const remTok = (id: string) => { setCounts(p => { const n = { ...p, [id]: Math.max(0, (p[id] || 0) - 1) }; if (camp) { const u = { ...camp, tokenCounts: n, updatedAt: Date.now() }; setCamp(u); setTimeout(() => saveCamp(u), 0); } return n; }); };
@@ -250,8 +299,42 @@ export default function ChaosBag() {
   const clear = () => { setCounts(emptyTokens()); setDrawn([]); setLast(null); };
 
   const selectCamp = (c: Campaign) => { setCamp(c); setCounts(c.tokenCounts); setDrawn([]); setLast(null); setShowCamps(false); setTab('bag'); };
-  const createCamp = (c: Campaign) => { const u = [...camps, c]; setCamps(u); save(u); selectCamp(c); };
-  const deleteCamp = (id: string) => { const u = camps.filter(c => c.id !== id); setCamps(u); save(u); if (camp?.id === id) { setCamp(null); setCounts(emptyTokens()); } };
+
+  const createCamp = (c: Campaign) => {
+    const u = [...camps, c];
+    setCamps(u);
+
+    if (currentUser) {
+      saveToFirestore(currentUser.uid, c).catch(err => {
+        console.error('Error creating campaign:', err);
+        save(u);
+      });
+    } else {
+      save(u);
+    }
+
+    selectCamp(c);
+  };
+
+  const deleteCamp = (id: string) => {
+    const u = camps.filter(c => c.id !== id);
+    setCamps(u);
+
+    if (currentUser) {
+      deleteFromFirestore(currentUser.uid, id).catch(err => {
+        console.error('Error deleting campaign:', err);
+        save(u);
+      });
+    } else {
+      save(u);
+    }
+
+    if (camp?.id === id) {
+      setCamp(null);
+      setCounts(emptyTokens());
+    }
+  };
+
   const closeCamp = () => { setCamp(null); setCounts(emptyTokens()); setDrawn([]); setLast(null); };
 
   const update = (u: Partial<Campaign>) => { if (!camp) return; const c = { ...camp, ...u, updatedAt: Date.now() }; setCamp(c); saveCamp(c); };
@@ -265,6 +348,24 @@ export default function ChaosBag() {
   const diffLabel: { [k: string]: string } = { easy: 'Fácil', normal: 'Normal', hard: 'Difícil', expert: 'Expert' };
   const total = bag.length;
 
+  // Show login screen if user is not authenticated
+  if (!currentUser) {
+    return <AuthForm />;
+  }
+
+  // Show loading state while migrating data
+  if (migrating) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-indigo-950 text-gray-100 flex items-center justify-center">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-16 w-16 border-4 border-amber-400 border-t-transparent mx-auto mb-4"></div>
+          <p className="text-amber-400 font-semibold">Migrando seus dados para a nuvem...</p>
+          <p className="text-gray-400 text-sm mt-2">Isso só acontece uma vez</p>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-indigo-950 text-gray-100 p-3">
       <div className="max-w-2xl mx-auto">
@@ -272,7 +373,11 @@ export default function ChaosBag() {
         <div className="flex justify-between items-center mb-4 gap-2">
           <button onClick={() => setShowCamps(true)} className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 rounded-lg text-sm font-medium">📚 Campanhas</button>
           {camp && <div className="flex-1 text-center"><span className="text-amber-400 font-semibold text-sm">{camp.name}</span><span className="text-gray-500 text-xs ml-2">({diffLabel[camp.difficulty]})</span><button onClick={closeCamp} className="ml-2 text-gray-500 hover:text-gray-300 text-xs">✕</button></div>}
-          <div className="flex gap-2">{camp && <button onClick={() => setShowStats(true)} className="px-3 py-1.5 bg-white/10 hover:bg-white/20 rounded-lg text-sm">📊</button>}<button onClick={() => setSound(!sound)} className={`px-3 py-1.5 rounded-lg text-sm ${sound ? 'bg-amber-600' : 'bg-gray-700'}`}>{sound ? '🔊' : '🔇'}</button></div>
+          <div className="flex gap-2">
+            {camp && <button onClick={() => setShowStats(true)} className="px-3 py-1.5 bg-white/10 hover:bg-white/20 rounded-lg text-sm">📊</button>}
+            <button onClick={() => setSound(!sound)} className={`px-3 py-1.5 rounded-lg text-sm ${sound ? 'bg-amber-600' : 'bg-gray-700'}`}>{sound ? '🔊' : '🔇'}</button>
+            <button onClick={() => logout()} className="px-3 py-1.5 bg-red-600 hover:bg-red-500 rounded-lg text-sm" title={currentUser.email || 'Sair'}>🚪</button>
+          </div>
         </div>
         {camp && <div className="flex gap-1 mb-4 bg-white/5 rounded-lg p-1">{(['bag', 'scenarios', 'investigators', 'notes'] as const).map(t => <button key={t} onClick={() => setTab(t)} className={`flex-1 py-2 rounded-md text-xs font-medium ${tab === t ? 'bg-amber-600 text-white' : 'text-gray-400 hover:text-white'}`}>{t === 'bag' ? '🎲 Bolsa' : t === 'scenarios' ? '📜 Cenários' : t === 'investigators' ? '🔍 Invest.' : '📝 Notas'}</button>)}</div>}
 
