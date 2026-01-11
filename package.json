@@ -5,6 +5,7 @@
   "private": true,
   "homepage": "https://raavier.github.io/arkham_companion",
   "dependencies": {
+    "firebase": "^12.7.0",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
     "react-scripts": "5.0.1",
