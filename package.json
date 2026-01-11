@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "description": "Digital Chaos Bag simulator for Arkham Horror: The Card Game with campaign management, statistics tracking, and investigator management",
   "private": true,
+  "homepage": "https://raavier.github.io/arkham_companion",
   "dependencies": {
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
