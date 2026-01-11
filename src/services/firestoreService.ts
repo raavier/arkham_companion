@@ -7,9 +7,12 @@ import {
   deleteDoc,
   onSnapshot,
   Unsubscribe,
-  writeBatch
+  writeBatch,
+  serverTimestamp,
+  getDoc
 } from 'firebase/firestore';
 import { db } from '../firebase';
+import { User } from 'firebase/auth';
 
 // Campaign type from App.tsx
 export interface Campaign {
@@ -29,6 +32,61 @@ export interface Campaign {
 }
 
 const CAMPAIGNS_COLLECTION = 'campaigns';
+
+/**
+ * User profile interface
+ */
+export interface UserProfile {
+  uid: string;
+  email: string | null;
+  displayName: string | null;
+  photoURL: string | null;
+  createdAt: any;
+  lastLogin: any;
+}
+
+/**
+ * Save or update user profile in Firestore
+ */
+export const saveUserProfile = async (user: User): Promise<void> => {
+  try {
+    const userRef = doc(db, 'users', user.uid);
+    const userDoc = await getDoc(userRef);
+
+    const userData: UserProfile = {
+      uid: user.uid,
+      email: user.email,
+      displayName: user.displayName,
+      photoURL: user.photoURL,
+      createdAt: userDoc.exists() ? userDoc.data().createdAt : serverTimestamp(),
+      lastLogin: serverTimestamp()
+    };
+
+    await setDoc(userRef, userData, { merge: true });
+    console.log('User profile saved successfully');
+  } catch (error) {
+    console.error('Error saving user profile:', error);
+    throw error;
+  }
+};
+
+/**
+ * Get user profile from Firestore
+ */
+export const getUserProfile = async (userId: string): Promise<UserProfile | null> => {
+  try {
+    const userRef = doc(db, 'users', userId);
+    const userDoc = await getDoc(userRef);
+
+    if (userDoc.exists()) {
+      return userDoc.data() as UserProfile;
+    }
+    return null;
+  } catch (error) {
+    console.error('Error getting user profile:', error);
+    return null;
+  }
+};
 
 /**
  * Get the campaigns collection path for a user

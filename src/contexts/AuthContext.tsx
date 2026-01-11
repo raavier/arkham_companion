@@ -9,6 +9,7 @@ import {
   updateProfile
 } from 'firebase/auth';
 import { auth, googleProvider } from '../firebase';
+import { saveUserProfile } from '../services/firestoreService';
 
 interface AuthContextType {
   currentUser: User | null;
@@ -44,6 +45,11 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     if (displayName && userCredential.user) {
       await updateProfile(userCredential.user, { displayName });
     }
+
+    // Save user profile to Firestore
+    if (userCredential.user) {
+      await saveUserProfile(userCredential.user);
+    }
   };
 
   const login = async (email: string, password: string) => {
@@ -59,8 +65,18 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
   };
 
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, (user) => {
+    const unsubscribe = onAuthStateChanged(auth, async (user) => {
       setCurrentUser(user);
+
+      // Save/update user profile when auth state changes (login)
+      if (user) {
+        try {
+          await saveUserProfile(user);
+        } catch (error) {
+          console.error('Failed to save user profile:', error);
+        }
+      }
+
       setLoading(false);
     });
 
