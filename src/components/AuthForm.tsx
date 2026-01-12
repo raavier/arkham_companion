@@ -50,7 +50,12 @@ const AuthForm: React.FC = () => {
     try {
       await loginWithGoogle();
     } catch (err: any) {
-      setError(err.message || 'Erro ao fazer login com Google');
+      // Se o usuário fechou o popup, não mostrar erro
+      if (err.code === 'auth/popup-closed-by-user' || err.code === 'auth/cancelled-popup-request') {
+        // Silenciar o erro - usuário simplesmente fechou o popup
+      } else {
+        setError(err.message || 'Erro ao fazer login com Google');
+      }
     } finally {
       setLoading(false);
     }
