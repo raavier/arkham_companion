@@ -226,6 +226,8 @@ export default function ChaosBag() {
   const [showCamps, setShowCamps] = useState(false);
   const [tab, setTab] = useState<'bag' | 'scenarios' | 'investigators' | 'notes'>('bag');
   const [migrating, setMigrating] = useState(false);
+  const [editingName, setEditingName] = useState(false);
+  const [tempName, setTempName] = useState('');
   const { draw: playDraw, success: playSuccess, fail: playFail } = useSound();
 
   // Load campaigns from Firestore when user logs in
@@ -281,12 +283,18 @@ export default function ChaosBag() {
   const remTok = (id: string) => { setCounts(p => { const n = { ...p, [id]: Math.max(0, (p[id] || 0) - 1) }; if (camp) { const u = { ...camp, tokenCounts: n, updatedAt: Date.now() }; setCamp(u); setTimeout(() => saveCamp(u), 0); } return n; }); };
 
   const drawTok = () => {
+    // Auto-return drawn tokens before drawing a new one
+    if (drawn.length > 0) {
+      setBag(p => [...p, ...drawn]);
+      setDrawn([]);
+    }
+
     if (bag.length === 0) return;
     setShake(true); setTimeout(() => setShake(false), 500);
     if (sound) playDraw();
     const i = Math.floor(Math.random() * bag.length), t = bag[i];
     setBag(p => { const n = [...p]; n.splice(i, 1); return n; });
-    setDrawn(p => [...p, t]); setLast(t);
+    setDrawn([t]); setLast(t);
     if (camp) {
       const s = { ...camp.statistics }; s.totalDraws++; s.tokenDraws[t.id] = (s.tokenDraws[t.id] || 0) + 1; s.drawHistory.push({ tokenId: t.id, timestamp: Date.now(), scenarioIndex: camp.currentScenarioIndex });
       const u = { ...camp, statistics: s, updatedAt: Date.now() }; setCamp(u); saveCamp(u);
@@ -372,11 +380,50 @@ export default function ChaosBag() {
         <div className="text-center mb-4"><h1 className="text-2xl font-bold text-amber-400 tracking-wider">🎴 CHAOS BAG</h1><p className="text-gray-400 italic text-xs">Arkham Horror LCG</p></div>
         <div className="flex justify-between items-center mb-4 gap-2">
           <button onClick={() => setShowCamps(true)} className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 rounded-lg text-sm font-medium">📚 Campanhas</button>
-          {camp && <div className="flex-1 text-center"><span className="text-amber-400 font-semibold text-sm">{camp.name}</span><span className="text-gray-500 text-xs ml-2">({diffLabel[camp.difficulty]})</span><button onClick={closeCamp} className="ml-2 text-gray-500 hover:text-gray-300 text-xs">✕</button></div>}
+          {camp && <div className="flex-1 text-center">
+            {editingName ? (
+              <input
+                type="text"
+                value={tempName}
+                onChange={e => setTempName(e.target.value)}
+                onBlur={() => {
+                  if (tempName.trim()) {
+                    update({ name: tempName.trim() });
+                  }
+                  setEditingName(false);
+                }}
+                onKeyDown={e => {
+                  if (e.key === 'Enter') {
+                    if (tempName.trim()) {
+                      update({ name: tempName.trim() });
+                    }
+                    setEditingName(false);
+                  } else if (e.key === 'Escape') {
+                    setEditingName(false);
+                  }
+                }}
+                autoFocus
+                className="text-amber-400 font-semibold text-sm bg-white/10 border border-amber-400 rounded px-2 py-1 outline-none"
+              />
+            ) : (
+              <span
+                className="text-amber-400 font-semibold text-sm cursor-pointer hover:underline"
+                onClick={() => {
+                  setTempName(camp.name);
+                  setEditingName(true);
+                }}
+                title="Clique para editar"
+              >
+                {camp.name}
+              </span>
+            )}
+            <span className="text-gray-500 text-xs ml-2">({diffLabel[camp.difficulty]})</span>
+            <button onClick={closeCamp} className="ml-2 text-gray-500 hover:text-gray-300 text-xs">✕</button>
+          </div>}
           <div className="flex gap-2">
             {camp && <button onClick={() => setShowStats(true)} className="px-3 py-1.5 bg-white/10 hover:bg-white/20 rounded-lg text-sm">📊</button>}
             <button onClick={() => setSound(!sound)} className={`px-3 py-1.5 rounded-lg text-sm ${sound ? 'bg-amber-600' : 'bg-gray-700'}`}>{sound ? '🔊' : '🔇'}</button>
-            <button onClick={() => logout()} className="px-3 py-1.5 bg-red-600 hover:bg-red-500 rounded-lg text-sm" title={currentUser.email || 'Sair'}>🚪</button>
+            <button onClick={() => { if (window.confirm('Deseja realmente sair?')) logout(); }} className="px-3 py-1.5 bg-red-600 hover:bg-red-500 rounded-lg text-sm" title={currentUser.email || 'Sair'}>🚪</button>
           </div>
         </div>
         {camp && <div className="flex gap-1 mb-4 bg-white/5 rounded-lg p-1">{(['bag', 'scenarios', 'investigators', 'notes'] as const).map(t => <button key={t} onClick={() => setTab(t)} className={`flex-1 py-2 rounded-md text-xs font-medium ${tab === t ? 'bg-amber-600 text-white' : 'text-gray-400 hover:text-white'}`}>{t === 'bag' ? '🎲 Bolsa' : t === 'scenarios' ? '📜 Cenários' : t === 'investigators' ? '🔍 Invest.' : '📝 Notas'}</button>)}</div>}
